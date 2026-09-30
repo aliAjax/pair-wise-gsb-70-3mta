@@ -4,12 +4,14 @@ import {
   Boxes,
   FileJson,
   GitBranch,
+  PackageOpen,
   Plus,
   Search,
   ShieldAlert,
   Upload,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { BatchStatusBadge } from '../components/contract/batch-badges';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -22,6 +24,7 @@ import {
   DialogTrigger,
 } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
+import { Link } from '@tanstack/react-router';
 import {
   Select,
   SelectContent,
@@ -33,16 +36,18 @@ import { Textarea } from '../components/ui/textarea';
 import { formatDateTime } from '../lib/utils';
 import {
   CONTRACT_STATUS_LABELS,
+  orderMembersByDependency,
   type ApiContract,
   type ContractStatus,
 } from '../models/contract';
-import { useContracts, useSaveContract } from '../services/contract-queries';
+import { useBatches, useContracts, useSaveContract } from '../services/contract-queries';
 
 type StatusFilter = ContractStatus | 'all';
 
 export function DashboardPage() {
   const navigate = useNavigate();
   const contracts = useContracts();
+  const batches = useBatches();
   const saveContract = useSaveContract();
   const [query, setQuery] = useState('');
   const [domain, setDomain] = useState('all');
@@ -86,6 +91,14 @@ export function DashboardPage() {
     return { pending, breaking, consumers, total: data.length };
   }, [contracts.data]);
 
+  const openBatches = useMemo(
+    () =>
+      (batches.data ?? [])
+        .filter((batch) => batch.status !== 'completed')
+        .slice(0, 4),
+    [batches.data],
+  );
+
   async function importContract() {
     setImportError('');
     try {
@@ -107,6 +120,7 @@ export function DashboardPage() {
         status: 'draft',
         updatedAt: now,
         openapi: JSON.stringify(parsed, null, 2),
+        dependsOn: [],
         changes: [],
         consumers: [],
         exemptions: [],
@@ -317,7 +331,7 @@ export function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>最近正式版本</CardTitle>
-            <p className="mt-1 text-xs text-slate-500">冻结版本保留校验值和变更摘要</p>
+            <p className="mt-1 text-xs text-slate-500">冻结版本保留校验值、变更摘要和发布批次</p>
           </CardHeader>
           <CardContent className="space-y-3">
             {(contracts.data ?? [])
@@ -330,46 +344,91 @@ export function DashboardPage() {
                   new Date(left.version.releasedAt).getTime(),
               )
               .slice(0, 4)
-              .map(({ contract, version }) => (
-                <div
-                  key={version.id}
-                  className="flex flex-col justify-between gap-2 border-b border-slate-100 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center"
-                >
-                  <div>
-                    <div className="text-sm font-medium">{contract.name}</div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      v{version.version} · {formatDateTime(version.releasedAt)} · {version.checksum}
+              .map(({ contract, version }) => {
+                const batch = (batches.data ?? []).find((item) => item.id === version.batchId);
+                return (
+                  <div
+                    key={version.id}
+                    className="flex flex-col justify-between gap-2 border-b border-slate-100 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center"
+                  >
+                    <div>
+                      <div className="text-sm font-medium">{contract.name}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        v{version.version} · {formatDateTime(version.releasedAt)} ·{' '}
+                        {version.checksum || '快照待补齐'}
+                      </div>
                     </div>
+                    {batch ? (
+                      <Badge tone={batch.legacy ? 'amber' : 'blue'}>{batch.name}</Badge>
+                    ) : (
+                      <Badge tone="amber">批次待迁移</Badge>
+                    )}
                   </div>
-                  <Badge tone="slate">已冻结</Badge>
-                </div>
-              ))}
+                );
+              })}
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>发布门禁</CardTitle>
-            <p className="mt-1 text-xs text-slate-500">建议在发布前固定检查的顺序</p>
-          </CardHeader>
-          <CardContent>
-            <ol className="space-y-4 text-sm text-slate-700">
-              {[
-                '逐条确认兼容、警告或不兼容结论',
-                '为警告和不兼容变化补充调用方影响',
-                '完成迁移方案或登记兼容层豁免',
-                '冻结版本并生成变更报告',
-              ].map((item, index) => (
-                <li key={item} className="flex gap-3">
-                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-sm bg-slate-100 text-xs font-semibold text-sky-900">
-                    {index + 1}
-                  </span>
-                  <span className="pt-1">{item}</span>
-                </li>
-              ))}
-            </ol>
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <PackageOpen className="h-4 w-4 text-sky-800" />
+                未完成发布批次
+              </CardTitle>
+              <p className="mt-1 text-xs text-slate-500">停在待处理或失败的批次可恢复重试</p>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {openBatches.length ? (
+                openBatches.map((batch) => {
+                  const ordered = orderMembersByDependency(batch.members);
+                  const frozen = ordered.filter((member) => member.status === 'frozen').length;
+                  return (
+                    <Link
+                      key={batch.id}
+                      to="/releases"
+                      className="block rounded-md border border-slate-200 p-2.5 hover:bg-slate-50"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <strong className="text-xs">{batch.name}</strong>
+                        <BatchStatusBadge status={batch.status} />
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        {frozen}/{ordered.length} 节点已冻结 · r{batch.revision}
+                      </div>
+                    </Link>
+                  );
+                })
+              ) : (
+                <p className="py-4 text-center text-xs text-slate-500">没有未完成批次。</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>发布门禁</CardTitle>
+              <p className="mt-1 text-xs text-slate-500">建议在发布前固定检查的顺序</p>
+            </CardHeader>
+            <CardContent>
+              <ol className="space-y-4 text-sm text-slate-700">
+                {[
+                  '逐条确认兼容、警告或不兼容结论',
+                  '为警告和不兼容变化补充调用方影响',
+                  '完成迁移方案或登记兼容层豁免',
+                  '按调用依赖组成批次并逐节点冻结',
+                ].map((item, index) => (
+                  <li key={item} className="flex gap-3">
+                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-sm bg-slate-100 text-xs font-semibold text-sky-900">
+                      {index + 1}
+                    </span>
+                    <span className="pt-1">{item}</span>
+                  </li>
+                ))}
+              </ol>
+            </CardContent>
+          </Card>
+        </div>
       </section>
     </div>
   );

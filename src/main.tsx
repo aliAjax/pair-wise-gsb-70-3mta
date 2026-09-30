@@ -4,6 +4,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
 import { router } from './router';
+import { useStoreSync } from './services/contract-queries';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -15,9 +16,15 @@ const queryClient = new QueryClient({
   },
 });
 
+function StoreSync() {
+  useStoreSync();
+  return null;
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
+      <StoreSync />
       <RouterProvider router={router} />
     </QueryClientProvider>
   </StrictMode>,

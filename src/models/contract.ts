@@ -54,6 +54,10 @@ export interface ContractVersion {
   notes: string;
   changeIds: string[];
   openapi: string;
+  /** 所属发布批次；旧冻结记录迁移后补齐 */
+  batchId?: string;
+  /** 批次内的成员节点，便于按节点追溯 */
+  batchMemberId?: string;
 }
 
 export interface ApiContract {
@@ -66,6 +70,8 @@ export interface ApiContract {
   status: ContractStatus;
   updatedAt: string;
   openapi: string;
+  /** 调用依赖：本契约会调用这些契约，发布时被依赖方必须先冻结 */
+  dependsOn: string[];
   changes: ContractChange[];
   consumers: ApiConsumer[];
   exemptions: Exemption[];
@@ -78,6 +84,59 @@ export interface ReleaseIssue {
   title: string;
   detail: string;
   changeId?: string;
+}
+
+export type BatchStatus =
+  | 'pending' // 已创建，尚未开始冻结
+  | 'running' // 至少一个成员已冻结，仍有未完成节点
+  | 'paused' // 停在待处理：下一个成员评审不完整
+  | 'failed' // 冻结失败（版本号冲突等），可从失败节点重试
+  | 'completed' // 全部成员已冻结
+  | 'migrating'; // 旧冻结记录迁移批次，尚有成员未补齐
+
+export type BatchMemberStatus =
+  | 'pending' // 等待按依赖顺序执行
+  | 'blocked' // 评审不完整，批次停在该节点
+  | 'failed' // 冻结失败，可从该节点重试
+  | 'frozen'; // 已冻结，成功版本保留
+
+export interface BatchMember {
+  id: string;
+  contractId: string;
+  contractName: string;
+  /** 目标冻结版本号 */
+  targetVersion: string;
+  notes: string;
+  /** 解析后的调用依赖（创建批次时快照，按节点 id 引用） */
+  dependsOnMemberIds: string[];
+  status: BatchMemberStatus;
+  /** 创建批次时的调用顺序序号，拓扑同序时保持稳定排序 */
+  ordinal: number;
+  blockers: ReleaseIssue[];
+  frozenVersionId?: string;
+  frozenAt?: string;
+  frozenChecksum?: string;
+  failureReason?: string;
+  /** 迁移节点缺少的契约/快照关联，待人工补齐 */
+  legacyContractId?: string;
+  legacyVersionId?: string;
+}
+
+export interface ReleaseBatch {
+  id: string;
+  name: string;
+  status: BatchStatus;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  notes: string;
+  members: BatchMember[];
+  /** 乐观并发版本号；提交时基于该值检测另一窗口的改动 */
+  revision: number;
+  /** 详情页单个契约冻结产生的隐式单成员批次 */
+  implicit?: boolean;
+  /** 旧冻结记录自动迁移生成的批次 */
+  legacy?: boolean;
 }
 
 export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
@@ -109,6 +168,84 @@ export const CONTRACT_STATUS_LABELS: Record<ContractStatus, string> = {
   released: '已发布',
   frozen: '已冻结',
 };
+
+export const BATCH_STATUS_LABELS: Record<BatchStatus, string> = {
+  pending: '待发布',
+  running: '发布中',
+  paused: '停在待处理',
+  failed: '冻结失败',
+  completed: '发布完成',
+  migrating: '待迁移',
+};
+
+export const BATCH_MEMBER_STATUS_LABELS: Record<BatchMemberStatus, string> = {
+  pending: '待冻结',
+  blocked: '评审未完成',
+  failed: '冻结失败',
+  frozen: '已冻结',
+};
+
+/**
+ * 按调用依赖拓扑排序：被依赖的成员排在前面。
+ * 同序节点保持创建顺序（ordinal），保证调用顺序稳定可预期。
+ * 检测到依赖环时抛出错误，避免发布顺序不确定。
+ */
+export function orderMembersByDependency<T extends {
+  id: string;
+  ordinal: number;
+  dependsOnMemberIds: string[];
+}>(members: T[]): T[] {
+  const byId = new Map(members.map((member) => [member.id, member]));
+  const indegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+
+  members.forEach((member) => {
+    indegree.set(member.id, 0);
+    dependents.set(member.id, []);
+  });
+  members.forEach((member) => {
+    member.dependsOnMemberIds.forEach((depId) => {
+      if (!byId.has(depId)) return;
+      indegree.set(member.id, (indegree.get(member.id) ?? 0) + 1);
+      dependents.get(depId)?.push(member.id);
+    });
+  });
+
+  const ready = members
+    .filter((member) => (indegree.get(member.id) ?? 0) === 0)
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .map((member) => member.id);
+  const ordered: T[] = [];
+
+  while (ready.length) {
+    const currentId = ready.shift()!;
+    const current = byId.get(currentId)!;
+    ordered.push(current);
+    dependents.get(currentId)?.forEach((dependentId) => {
+      const next = (indegree.get(dependentId) ?? 0) - 1;
+      indegree.set(dependentId, next);
+      if (next === 0) {
+        const dependent = byId.get(dependentId)!;
+        const insertAt = ready.findIndex((id) => (byId.get(id)?.ordinal ?? 0) > dependent.ordinal);
+        if (insertAt === -1) ready.push(dependentId);
+        else ready.splice(insertAt, 0, dependentId);
+      }
+    });
+  }
+
+  if (ordered.length !== members.length) {
+    const cyclic = members
+      .filter((member) => !ordered.some((item) => item.id === member.id))
+      .map((member) => member.id);
+    throw new Error(`契约调用依赖存在循环引用：${cyclic.join('、')}，请先解除环依赖。`);
+  }
+  return ordered;
+}
+
+/** 批次当前执行/重试应从哪个成员开始（第一个未冻结节点，按依赖顺序） */
+export function nextRunnableMember(batch: ReleaseBatch): BatchMember | undefined {
+  return orderMembersByDependency(batch.members).find((member) => member.status !== 'frozen');
+}
 
 export function classifyChange(input: {
   kind: ChangeKind;

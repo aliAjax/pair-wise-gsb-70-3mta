@@ -123,6 +123,7 @@ export const seedContracts: ApiContract[] = [
     status: 'review',
     updatedAt: '2026-09-29T03:12:00.000Z',
     openapi: orderOpenApi,
+    dependsOn: ['contract-user'],
     changes: [
       change(
         'chg-order-1',
@@ -230,6 +231,7 @@ export const seedContracts: ApiContract[] = [
     status: 'ready',
     updatedAt: '2026-09-28T10:40:00.000Z',
     openapi: paymentOpenApi,
+    dependsOn: ['contract-order'],
     changes: [
       change(
         'chg-pay-1',
@@ -308,6 +310,7 @@ export const seedContracts: ApiContract[] = [
     status: 'review',
     updatedAt: '2026-09-27T06:15:00.000Z',
     openapi: userOpenApi,
+    dependsOn: [],
     changes: [
       change(
         'chg-user-1',
@@ -336,6 +339,18 @@ export const seedContracts: ApiContract[] = [
       },
     ],
     exemptions: [],
-    versions: [],
+    versions: [
+      {
+        // 旧数据：缺少批次关联，且快照字段不完整，迁移后需要人工补齐
+        id: 'ver-user-113',
+        contractId: 'contract-user',
+        version: '1.13.0',
+        releasedAt: '2026-07-08T07:20:00.000Z',
+        checksum: '',
+        notes: '补充用户角色字段，旧记录未保存快照。',
+        changeIds: [],
+        openapi: '',
+      },
+    ],
   },
 ];

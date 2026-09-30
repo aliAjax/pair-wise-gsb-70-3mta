@@ -45,6 +45,7 @@ import {
 } from '../services/contract-service';
 import {
   useAddExemption,
+  useBatches,
   useContract,
   useFreezeVersion,
   useReviewChange,
@@ -63,10 +64,12 @@ export function ContractDetailPage() {
   const updateOpenApi = useUpdateOpenApi();
   const saveContract = useSaveContract();
   const freezeVersion = useFreezeVersion();
+  const batchesQuery = useBatches();
   const [releaseVersion, setReleaseVersion] = useState('');
   const [releaseNotes, setReleaseNotes] = useState('');
   const [reviewFilter, setReviewFilter] = useState<ReviewState | 'all'>('all');
   const [selectedVersionId, setSelectedVersionId] = useState('');
+  const [freezeError, setFreezeError] = useState('');
 
   const contract = contractQuery.data;
   const issues = useMemo(
@@ -82,6 +85,19 @@ export function ContractDetailPage() {
   const selectedVersion =
     contract?.versions.find((version) => version.id === selectedVersionId) ??
     contract?.versions[0];
+
+  const openBatch = batchesQuery.data?.find(
+    (batch) =>
+      !batch.legacy &&
+      batch.status !== 'completed' &&
+      batch.members.some(
+        (member) => member.contractId === contractId && member.status !== 'frozen',
+      ),
+  );
+  const batchById = new Map((batchesQuery.data ?? []).map((batch) => [batch.id, batch]));
+  const latestBatch = contract?.versions[0]?.batchId
+    ? batchById.get(contract.versions[0].batchId)
+    : undefined;
 
   if (contractQuery.isLoading) {
     return <PageState text="正在加载契约详情..." />;
@@ -129,19 +145,24 @@ export function ContractDetailPage() {
 
   async function freeze() {
     if (!releaseVersion.trim()) return;
-    await freezeVersion.mutateAsync({
-      contractId,
-      version: releaseVersion.trim(),
-      notes: releaseNotes.trim() || '本版契约变更评审完成。',
-    });
-    setReleaseVersion('');
-    setReleaseNotes('');
+    setFreezeError('');
+    try {
+      await freezeVersion.mutateAsync({
+        contractId,
+        version: releaseVersion.trim(),
+        notes: releaseNotes.trim() || '本版契约变更评审完成。',
+      });
+      setReleaseVersion('');
+      setReleaseNotes('');
+    } catch (error) {
+      setFreezeError(error instanceof Error ? error.message : '冻结失败。');
+    }
   }
 
   function exportReport() {
     downloadText(
       `${currentContract.id}-${currentContract.version}-change-report.md`,
-      buildChangeReport(currentContract),
+      buildChangeReport(currentContract, latestBatch),
       'text/markdown;charset=utf-8',
     );
   }
@@ -367,10 +388,24 @@ export function ContractDetailPage() {
               <CardHeader>
                 <CardTitle>冻结正式版本</CardTitle>
                 <p className="mt-1 text-xs text-slate-500">
-                  冻结后版本定义不可覆盖，并保留校验值
+                  冻结会自动归入单契约发布批次，版本定义不可覆盖并保留校验值
                 </p>
               </CardHeader>
               <CardContent>
+                {openBatch && (
+                  <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                    该契约已在未完成批次「{openBatch.name}」中，请在
+                    <Link to="/releases" className="mx-1 font-medium text-sky-800 hover:underline">
+                      版本发布
+                    </Link>
+                    页按调用顺序统一冻结，不能在此单独冻结以免漏掉调用顺序。
+                  </div>
+                )}
+                {freezeError && (
+                  <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-800">
+                    {freezeError}
+                  </div>
+                )}
                 <label className="text-xs font-medium text-slate-700">版本号</label>
                 <Input
                   className="mt-1.5"
@@ -387,7 +422,12 @@ export function ContractDetailPage() {
                 />
                 <Button
                   className="mt-4 w-full"
-                  disabled={!!blockers || !releaseVersion.trim() || freezeVersion.isPending}
+                  disabled={
+                    !!blockers ||
+                    !releaseVersion.trim() ||
+                    freezeVersion.isPending ||
+                    Boolean(openBatch)
+                  }
                   onClick={() => void freeze()}
                 >
                   <LockKeyhole className="h-4 w-4" />
@@ -406,26 +446,46 @@ export function ContractDetailPage() {
                   <CardTitle>正式版本</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  {contract.versions.map((version) => (
-                    <button
-                      key={version.id}
-                      type="button"
-                      className={
-                        selectedVersion.id === version.id
-                          ? 'w-full rounded-md border border-sky-300 bg-sky-50 p-3 text-left'
-                          : 'w-full rounded-md border border-slate-200 p-3 text-left hover:bg-slate-50'
-                      }
-                      onClick={() => setSelectedVersionId(version.id)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <strong className="text-sm">v{version.version}</strong>
-                        <span className="font-mono text-[10px] text-slate-500">
-                          {version.checksum}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-xs leading-5 text-slate-600">{version.notes}</p>
-                    </button>
-                  ))}
+                  {contract.versions.map((version) => {
+                    const versionBatch = version.batchId
+                      ? batchById.get(version.batchId)
+                      : undefined;
+                    return (
+                      <button
+                        key={version.id}
+                        type="button"
+                        className={
+                          selectedVersion.id === version.id
+                            ? 'w-full rounded-md border border-sky-300 bg-sky-50 p-3 text-left'
+                            : 'w-full rounded-md border border-slate-200 p-3 text-left hover:bg-slate-50'
+                        }
+                        onClick={() => setSelectedVersionId(version.id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <strong className="text-sm">v{version.version}</strong>
+                          <span className="font-mono text-[10px] text-slate-500">
+                            {version.checksum || '快照待补齐'}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs leading-5 text-slate-600">{version.notes}</p>
+                        <div className="mt-2">
+                          {versionBatch ? (
+                            <Link
+                              to="/releases"
+                              className="inline-flex"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <Badge tone={versionBatch.legacy ? 'amber' : 'blue'}>
+                                {versionBatch.name}
+                              </Badge>
+                            </Link>
+                          ) : (
+                            <Badge tone="amber">批次待迁移</Badge>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
                   {!contract.versions.length && (
                     <p className="py-8 text-center text-sm text-slate-500">尚无正式版本。</p>
                   )}
@@ -481,7 +541,7 @@ export function ContractDetailPage() {
               </CardHeader>
               <CardContent>
                 <pre className="max-h-[650px] overflow-auto whitespace-pre-wrap rounded-md bg-slate-950 p-4 font-mono text-xs leading-6 text-slate-100">
-                  {buildChangeReport(contract)}
+                  {buildChangeReport(contract, latestBatch)}
                 </pre>
               </CardContent>
             </Card>
