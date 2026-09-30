@@ -46,6 +46,10 @@ const releasesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/releases',
   component: ReleasesPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    batch: typeof search.batch === 'string' ? search.batch : undefined,
+    migration: typeof search.migration === 'string' ? search.migration : undefined,
+  }),
 });
 
 const reportsRoute = createRoute({

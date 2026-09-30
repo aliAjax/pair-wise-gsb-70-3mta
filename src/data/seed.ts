@@ -123,6 +123,7 @@ export const seedContracts: ApiContract[] = [
     status: 'review',
     updatedAt: '2026-09-29T03:12:00.000Z',
     openapi: orderOpenApi,
+    dependencies: ['contract-payment'],
     changes: [
       change(
         'chg-order-1',
@@ -230,6 +231,7 @@ export const seedContracts: ApiContract[] = [
     status: 'ready',
     updatedAt: '2026-09-28T10:40:00.000Z',
     openapi: paymentOpenApi,
+    dependencies: ['contract-user'],
     changes: [
       change(
         'chg-pay-1',
@@ -308,6 +310,7 @@ export const seedContracts: ApiContract[] = [
     status: 'review',
     updatedAt: '2026-09-27T06:15:00.000Z',
     openapi: userOpenApi,
+    dependencies: [],
     changes: [
       change(
         'chg-user-1',
@@ -336,6 +339,18 @@ export const seedContracts: ApiContract[] = [
       },
     ],
     exemptions: [],
-    versions: [],
+    versions: [
+      {
+        // 批次化改造前的历史冻结记录：归属契约已下线，迁移时无法补齐，标记为待迁移
+        id: 'ver-loyalty-090',
+        contractId: 'contract-loyalty',
+        version: '0.9.0',
+        releasedAt: '2026-06-12T08:00:00.000Z',
+        checksum: '7c01bd55',
+        notes: '会员积分历史服务，服务下线前最后一个冻结版本。',
+        changeIds: [],
+        openapi: userOpenApi.replaceAll('1.14.0', '0.9.0'),
+      },
+    ],
   },
 ];

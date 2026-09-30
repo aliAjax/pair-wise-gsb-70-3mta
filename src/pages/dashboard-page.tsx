@@ -107,6 +107,7 @@ export function DashboardPage() {
         status: 'draft',
         updatedAt: now,
         openapi: JSON.stringify(parsed, null, 2),
+        dependencies: [],
         changes: [],
         consumers: [],
         exemptions: [],

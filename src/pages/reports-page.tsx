@@ -1,5 +1,6 @@
-import { Download, FileJson, FileText, ShieldCheck } from 'lucide-react';
-import { useMemo } from 'react';
+import { Link } from '@tanstack/react-router';
+import { Download, FileJson, FileText, FolderGit2, ShieldCheck } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -12,18 +13,38 @@ import {
 } from '../components/ui/select';
 import { formatDateTime } from '../lib/utils';
 import { buildChangeReport } from '../services/contract-service';
+import { buildBatchReport } from '../services/release-batch-service';
+import { useReleaseBatches } from '../services/batch-queries';
 import { useContracts } from '../services/contract-queries';
 import { useReviewStore } from '../store/review-store';
+import { BATCH_STATUS_LABELS } from '../models/release-batch';
 
 export function ReportsPage() {
   const contracts = useContracts();
+  const batchesQuery = useReleaseBatches();
   const selectedContractId = useReviewStore((state) => state.selectedContractId);
   const setSelectedContract = useReviewStore((state) => state.setSelectedContract);
-  const contract =
-    (contracts.data ?? []).find((item) => item.id === selectedContractId) ??
-    contracts.data?.[0];
+  const [mode, setMode] = useState<'contract' | 'batch'>('contract');
+  const [selectedBatchId, setSelectedBatchId] = useState('');
 
-  const report = useMemo(() => (contract ? buildChangeReport(contract) : ''), [contract]);
+  const contractList = contracts.data ?? [];
+  const contract =
+    contractList.find((item) => item.id === selectedContractId) ?? contractList[0];
+  const batches = useMemo(
+    () =>
+      (batchesQuery.data ?? [])
+        .filter((batch) => batch.status !== 'archived')
+        .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()),
+    [batchesQuery.data],
+  );
+  const batch = batches.find((item) => item.id === selectedBatchId) ?? batches[0];
+
+  const report = useMemo(() => {
+    if (mode === 'batch') {
+      return batch ? buildBatchReport(batch, contractList) : '';
+    }
+    return contract ? buildChangeReport(contract) : '';
+  }, [mode, batch, contract, contractList]);
   const reviewed = contract?.changes.filter((change) => change.reviewState !== 'pending') ?? [];
 
   return (
@@ -35,17 +56,21 @@ export function ReportsPage() {
             契约变更报告
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            汇总接口差异、兼容性结论、调用方影响、迁移方案和兼容层豁免，供发布评审归档。
+            汇总接口差异、兼容性结论、调用方影响、迁移方案和兼容层豁免；发布批次报告按成员冻结顺序追溯整个联合发布。
           </p>
         </div>
-        {contract && (
+        {report && (
           <div className="flex gap-2">
             <Button
               variant="secondary"
               onClick={() =>
                 downloadText(
-                  `${contract.id}-${contract.version}.json`,
-                  JSON.stringify(contract, null, 2),
+                  mode === 'batch' && batch
+                    ? `${batch.id}.json`
+                    : `${contract?.id}-${contract?.version}.json`,
+                  mode === 'batch' && batch
+                    ? JSON.stringify(batch, null, 2)
+                    : JSON.stringify(contract, null, 2),
                   'application/json;charset=utf-8',
                 )
               }
@@ -56,7 +81,9 @@ export function ReportsPage() {
             <Button
               onClick={() =>
                 downloadText(
-                  `${contract.id}-${contract.version}-change-report.md`,
+                  mode === 'batch' && batch
+                    ? `${batch.id}-report.md`
+                    : `${contract?.id}-${contract?.version}-change-report.md`,
                   report,
                   'text/markdown;charset=utf-8',
                 )
@@ -71,35 +98,122 @@ export function ReportsPage() {
 
       <Card className="mb-4">
         <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center">
-          <span className="text-sm font-medium text-slate-700">选择契约</span>
-          <Select
-            value={contract?.id ?? ''}
-            onValueChange={setSelectedContract}
-          >
-            <SelectTrigger className="w-full sm:w-80">
-              <SelectValue placeholder="选择契约" />
-            </SelectTrigger>
-            <SelectContent>
-              {(contracts.data ?? []).map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.name} · v{item.version}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {contract && (
-            <div className="flex flex-wrap gap-2 sm:ml-auto">
-              <Badge tone="blue">{contract.domain}</Badge>
-              <Badge tone="neutral">{contract.changes.length} 个变化</Badge>
-              <Badge tone={reviewed.length === contract.changes.length ? 'green' : 'amber'}>
-                {reviewed.length === contract.changes.length ? '评审完成' : '仍有待评审项'}
-              </Badge>
-            </div>
+          <div className="flex rounded-sm border border-slate-200 p-0.5">
+            <button
+              type="button"
+              className={
+                mode === 'contract'
+                  ? 'rounded-sm bg-sky-100 px-3 py-1.5 text-xs font-medium text-sky-900'
+                  : 'px-3 py-1.5 text-xs text-slate-600'
+              }
+              onClick={() => setMode('contract')}
+            >
+              单契约报告
+            </button>
+            <button
+              type="button"
+              className={
+                mode === 'batch'
+                  ? 'rounded-sm bg-sky-100 px-3 py-1.5 text-xs font-medium text-sky-900'
+                  : 'px-3 py-1.5 text-xs text-slate-600'
+              }
+              onClick={() => setMode('batch')}
+            >
+              发布批次报告
+            </button>
+          </div>
+
+          {mode === 'contract' ? (
+            <>
+              <Select value={contract?.id ?? ''} onValueChange={setSelectedContract}>
+                <SelectTrigger className="w-full sm:w-80">
+                  <SelectValue placeholder="选择契约" />
+                </SelectTrigger>
+                <SelectContent>
+                  {contractList.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name} · v{item.version}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {contract && (
+                <div className="flex flex-wrap gap-2 sm:ml-auto">
+                  <Badge tone="blue">{contract.domain}</Badge>
+                  <Badge tone="neutral">{contract.changes.length} 个变化</Badge>
+                  <Badge tone={reviewed.length === contract.changes.length ? 'green' : 'amber'}>
+                    {reviewed.length === contract.changes.length ? '评审完成' : '仍有待评审项'}
+                  </Badge>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <Select value={batch?.id ?? ''} onValueChange={setSelectedBatchId}>
+                <SelectTrigger className="w-full sm:w-96">
+                  <SelectValue placeholder="选择发布批次" />
+                </SelectTrigger>
+                <SelectContent>
+                  {batches.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name} · {BATCH_STATUS_LABELS[item.status]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {batch && (
+                <div className="flex flex-wrap gap-2 sm:ml-auto">
+                  <Badge tone="neutral">{batch.members.length} 个成员</Badge>
+                  <Badge
+                    tone={
+                      batch.status === 'completed'
+                        ? 'green'
+                        : batch.status === 'paused'
+                          ? 'amber'
+                          : 'blue'
+                    }
+                  >
+                    {BATCH_STATUS_LABELS[batch.status]}
+                  </Badge>
+                  <Link to="/releases" search={{ batch: batch.id, migration: undefined }}>
+                    <Badge tone="blue" className="hover:underline">
+                      <FolderGit2 className="mr-1 h-3 w-3" />
+                      打开发布页
+                    </Badge>
+                  </Link>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
 
-      {contract ? (
+      {mode === 'batch' ? (
+        batch ? (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>批次报告预览</CardTitle>
+                <p className="mt-1 text-xs text-slate-500">
+                  按调用依赖的冻结顺序、暂停节点与成功版本完整追溯
+                </p>
+              </div>
+              <FileText className="h-5 w-5 text-slate-400" />
+            </CardHeader>
+            <CardContent>
+              <pre className="max-h-[720px] overflow-auto whitespace-pre-wrap rounded-md bg-slate-950 p-4 font-mono text-xs leading-6 text-slate-100">
+                {report}
+              </pre>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardContent className="py-16 text-center text-sm text-slate-500">
+              暂无可生成报告的发布批次。
+            </CardContent>
+          </Card>
+        )
+      ) : contract ? (
         <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">

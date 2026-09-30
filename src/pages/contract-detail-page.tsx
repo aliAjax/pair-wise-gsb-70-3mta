@@ -51,6 +51,7 @@ import {
   useSaveContract,
   useUpdateOpenApi,
 } from '../services/contract-queries';
+import { useReleaseBatches } from '../services/batch-queries';
 import { useReviewStore } from '../store/review-store';
 
 export function ContractDetailPage() {
@@ -63,6 +64,7 @@ export function ContractDetailPage() {
   const updateOpenApi = useUpdateOpenApi();
   const saveContract = useSaveContract();
   const freezeVersion = useFreezeVersion();
+  const batchesQuery = useReleaseBatches();
   const [releaseVersion, setReleaseVersion] = useState('');
   const [releaseNotes, setReleaseNotes] = useState('');
   const [reviewFilter, setReviewFilter] = useState<ReviewState | 'all'>('all');
@@ -367,7 +369,15 @@ export function ContractDetailPage() {
               <CardHeader>
                 <CardTitle>冻结正式版本</CardTitle>
                 <p className="mt-1 text-xs text-slate-500">
-                  冻结后版本定义不可覆盖，并保留校验值
+                  冻结会创建单成员发布批次并按门禁执行，版本与批次互相关联；多个契约联合发布请前往
+                  <Link
+                    to="/releases"
+                    search={{ batch: undefined, migration: undefined }}
+                    className="mx-1 font-medium text-sky-800 hover:underline"
+                  >
+                    版本发布
+                  </Link>
+                  组织批次。
                 </p>
               </CardHeader>
               <CardContent>
@@ -406,26 +416,52 @@ export function ContractDetailPage() {
                   <CardTitle>正式版本</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  {contract.versions.map((version) => (
-                    <button
-                      key={version.id}
-                      type="button"
-                      className={
-                        selectedVersion.id === version.id
-                          ? 'w-full rounded-md border border-sky-300 bg-sky-50 p-3 text-left'
-                          : 'w-full rounded-md border border-slate-200 p-3 text-left hover:bg-slate-50'
-                      }
-                      onClick={() => setSelectedVersionId(version.id)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <strong className="text-sm">v{version.version}</strong>
-                        <span className="font-mono text-[10px] text-slate-500">
-                          {version.checksum}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-xs leading-5 text-slate-600">{version.notes}</p>
-                    </button>
-                  ))}
+                  {contract.versions.map((version) => {
+                    const batch = version.batchId
+                      ? (batchesQuery.data ?? []).find((item) => item.id === version.batchId)
+                      : undefined;
+                    return (
+                      <button
+                        key={version.id}
+                        type="button"
+                        className={
+                          selectedVersion.id === version.id
+                            ? 'w-full rounded-md border border-sky-300 bg-sky-50 p-3 text-left'
+                            : 'w-full rounded-md border border-slate-200 p-3 text-left hover:bg-slate-50'
+                        }
+                        onClick={() => setSelectedVersionId(version.id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <strong className="text-sm">v{version.version}</strong>
+                          <span className="font-mono text-[10px] text-slate-500">
+                            {version.checksum}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs leading-5 text-slate-600">{version.notes}</p>
+                        <div className="mt-2">
+                          {batch ? (
+                            <Link
+                              to="/releases"
+                              search={{ batch: batch.id, migration: undefined }}
+                              onClick={(event) => event.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-800 hover:underline"
+                            >
+                              <Layers3 className="h-3 w-3" />
+                              {batch.legacy ? '历史迁移批次' : '发布批次'}：{batch.name}
+                            </Link>
+                          ) : version.batchId ? (
+                            <span className="text-[11px] text-amber-700">
+                              所属批次已缺失
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-amber-700">
+                              批次关联待迁移
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
                   {!contract.versions.length && (
                     <p className="py-8 text-center text-sm text-slate-500">尚无正式版本。</p>
                   )}

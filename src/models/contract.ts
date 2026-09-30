@@ -54,6 +54,9 @@ export interface ContractVersion {
   notes: string;
   changeIds: string[];
   openapi: string;
+  /** 所属发布批次；批次化改造前的历史记录由迁移任务补齐 */
+  batchId?: string;
+  batchTitle?: string;
 }
 
 export interface ApiContract {
@@ -66,6 +69,8 @@ export interface ApiContract {
   status: ContractStatus;
   updatedAt: string;
   openapi: string;
+  /** 调用依赖：本契约调用的其它契约 id，发布时被依赖方需先冻结 */
+  dependencies: string[];
   changes: ContractChange[];
   consumers: ApiConsumer[];
   exemptions: Exemption[];

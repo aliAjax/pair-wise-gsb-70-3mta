@@ -1,4 +1,3 @@
-import { seedContracts } from '../data/seed';
 import type {
   ApiContract,
   ContractChange,
@@ -6,8 +5,8 @@ import type {
   ReviewState,
 } from '../models/contract';
 import { stableChecksum, formatDateTime } from '../lib/utils';
+import { loadContracts, persistContracts } from './storage';
 
-const STORAGE_KEY = 'pair-wise-gsb-70-contracts';
 const LATENCY = 180;
 
 function clone<T>(value: T): T {
@@ -20,16 +19,7 @@ async function wait(): Promise<void> {
 
 export async function listContracts(): Promise<ApiContract[]> {
   await wait();
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      return JSON.parse(stored) as ApiContract[];
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  }
-  persistContracts(seedContracts);
-  return clone(seedContracts);
+  return clone(loadContracts());
 }
 
 export async function getContract(id: string): Promise<ApiContract | undefined> {
@@ -158,36 +148,41 @@ export async function addExemption(
   return clone(updated);
 }
 
-export async function freezeVersion(
-  contractId: string,
+/**
+ * 在给定契约集合上生成冻结版本（纯函数），由单契约快捷冻结和批次执行器复用。
+ * 不写存储，保证批次内多个成员的冻结与批次状态可以原子地一起提交。
+ */
+export function buildFrozenVersion(
+  contract: ApiContract,
   version: string,
   notes: string,
-): Promise<ApiContract> {
-  const contracts = await listContracts();
-  const contract = contracts.find((item) => item.id === contractId);
-  if (!contract) {
-    throw new Error('契约不存在');
-  }
-
-  const release: ContractVersion = {
-    id: `ver-${Date.now()}`,
-    contractId,
+  association?: { batchId: string; batchTitle: string },
+): ContractVersion {
+  return {
+    id: `ver-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    contractId: contract.id,
     version,
     releasedAt: new Date().toISOString(),
     checksum: stableChecksum(contract.openapi),
     notes,
     changeIds: contract.changes.map((change) => change.id),
     openapi: contract.openapi,
+    batchId: association?.batchId,
+    batchTitle: association?.batchTitle,
   };
-  const updated: ApiContract = {
+}
+
+/** 应用冻结结果到契约：写入版本、抬升当前版本号并置为已冻结 */
+export function applyFrozenVersion(
+  contract: ApiContract,
+  release: ContractVersion,
+): ApiContract {
+  return {
     ...contract,
-    version,
+    version: release.version,
     status: 'frozen',
     versions: [release, ...contract.versions],
   };
-  persistContracts(contracts.map((item) => (item.id === contractId ? updated : item)));
-  await wait();
-  return clone(updated);
 }
 
 export function generateExampleRequest(contract: ApiContract, change?: ContractChange): string {
@@ -268,6 +263,15 @@ export function buildChangeReport(contract: ApiContract): string {
           (item) => `- ${item.scope}：${item.reason}（至 ${item.expiresAt}）`,
         )
       : ['- 无']),
+    '',
+    '## 正式版本批次追溯',
+    ...(contract.versions.length
+      ? contract.versions.map((item) =>
+          item.batchId
+            ? `- v${item.version}（${item.checksum}）-> ${item.batchTitle ?? '发布批次'} ${item.batchId}`
+            : `- v${item.version}（${item.checksum}）-> 历史记录，批次关联待迁移`,
+        )
+      : ['- 暂无冻结版本']),
   ];
   return lines.join('\n');
 }
@@ -285,6 +289,3 @@ export function diffVersionSummary(contract: ApiContract): string {
   ].join('\n');
 }
 
-function persistContracts(contracts: ApiContract[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(contracts));
-}

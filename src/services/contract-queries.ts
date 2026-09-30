@@ -3,13 +3,13 @@ import type { ReviewState } from '../models/contract';
 import {
   addExemption,
   bulkReviewChanges,
-  freezeVersion,
   getContract,
   listContracts,
   reviewChange,
   saveContract,
   updateContractOpenApi,
 } from './contract-service';
+import { freezeSingleContract } from './release-batch-service';
 
 export const contractKeys = {
   all: ['contracts'] as const,
@@ -101,7 +101,10 @@ export function useFreezeVersion() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: { contractId: string; version: string; notes: string }) =>
-      freezeVersion(input.contractId, input.version, input.notes),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
+      freezeSingleContract(input.contractId, input.version, input.notes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: contractKeys.all });
+      queryClient.invalidateQueries({ queryKey: ['release-batches'] });
+    },
   });
 }
